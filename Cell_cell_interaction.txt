@@ -1,0 +1,85 @@
+#####Cell-cell communication
+#Packages
+  library(Seurat)
+  library(dplyr)
+  library(Matrix)
+  library(ggplot2)
+  library(cowplot)
+  library(EnsDb.Mmusculus.v79)
+  library(Signac)
+  library(S4Vectors)
+  library(patchwork)
+  library(harmony)
+  library(Cairo)
+  library(slingshot)
+  library(TSCAN)
+  library(scales)
+  library(viridisLite)
+  library(DDRTree)
+  library(tradeSeq)
+  library(CellChat)
+  library(ggplot2)
+  library(ggalluvial)
+  library(svglite)
+load("~/scdata SPINK1 KIT/rna.All.combined.integrated.filter.Rdata")
+table(rna.All.combined.integrated.filter@meta.data$timepoint)
+head(Idents(rna.All.combined.integrated.filter))
+rna.All.combined.integrated.filter$cellname<-Idents(rna.All.combined.integrated.filter)
+data.input.tpprc <- GetAssayData(rna.All.combined.integrated.filter, assay = "RNA", slot = "data") 
+dim(data.input.tpprc)
+meta.tpprc <-rna.All.combined.integrated.filter@meta.data
+cellchat.tpprc <- createCellChat(object = data.input.tpprc,meta=meta.tpprc,group.by ="cellname")
+summary(cellchat.tpprc)
+levels(cellchat.tpprc@idents)## show factor levels of the cell labels
+groupSize <- as.numeric(table(cellchat.tpprc@idents))## number of cells in each cell group
+####
+CellChatDB <- CellChatDB.mouse
+showDatabaseCategory(CellChatDB)
+colnames(CellChatDB$interaction)
+
+CellChatDB.use <- subsetDB(CellChatDB, search =c("Secreted Signaling","ECM-Receptor","Cell-Cell Contact"))# use Secreted Signaling for cell-cell communication analysis
+table(CellChatDB.use$interaction$annotation)
+showDatabaseCategory(CellChatDB.use)
+#CellChatDB.use.Secreted.Signaling <- subsetDB(CellChatDB, search =c("Secreted Signaling"))# use Secreted Signaling for cell-cell communication analysis
+#dim(CellChatDB.use.Secreted.Signaling$interaction)
+dim(CellChatDB.use$interaction)
+cellchat.tpprc@DB <- CellChatDB.use # set the used database in the object
+unique(CellChatDB$interaction$annotation)
+
+cellchat.tpprc <- subsetData(cellchat.tpprc) # subset the expression data of signaling genes for saving computation cost
+#future::plan("multiprocess", workers = 4) # do parallel  
+cellchat.tpprc <- identifyOverExpressedGenes(cellchat.tpprc)
+cellchat.tpprc <- identifyOverExpressedInteractions(cellchat.tpprc)
+cellchat.tpprc <- projectData(cellchat.tpprc, PPI.mouse)  
+
+cellchat.tpprc <- computeCommunProb(cellchat.tpprc)
+# Filter out the cell-cell communication if there are only few number of cells in certain cell groups
+cellchat.tpprc <- filterCommunication(cellchat.tpprc, min.cells = 10)
+cellchat.tpprc <- computeCommunProbPathway(cellchat.tpprc)
+cellchat.tpprc <- aggregateNet(cellchat.tpprc)
+groupSize <- as.numeric(table(cellchat.tpprc@idents))
+par(mfrow = c(1,2), xpd=TRUE)
+netVisual_circle(cellchat.tpprc@net$count, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Number of interactions")
+netVisual_circle(cellchat.tpprc@net$weight, vertex.weight = groupSize, weight.scale = T, label.edge= F, title.name = "Interaction weights/strength")
+
+mat <- cellchat.tpprc@net$weight
+par(mfrow = c(3,4), xpd=TRUE)
+for (i in 1:nrow(mat)) {
+  mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+  mat2[i, ] <- mat[i, ]
+  netVisual_circle(mat2, vertex.weight = groupSize, weight.scale = T, edge.weight.max = max(mat), title.name = rownames(mat)[i])
+}
+
+####
+# Compute the network centrality scores
+cellchat.tpprc <- netAnalysis_computeCentrality(cellchat.tpprc, slot.name = "netP") # the slot 'netP' means the inferred intercellular communication network of signaling pathways
+# Visualize the computed centrality scores using heatmap, allowing ready identification of major signaling roles of cell groups
+#write.csv(cellchat.tpprc@netP$pathways,"Cell signaling pathways.csv")
+# Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+gg1 <- netAnalysis_signalingRole_scatter(cellchat.tpprc, title = "Signaling role from all signaling pathways")
+#> Signaling role analysis on the aggregated cell-cell communication network from all signaling pathways
+# Signaling role analysis on the cell-cell communication networks of interest
+gg2 <- netAnalysis_signalingRole_scatter(cellchat.tpprc, signaling = c("WNT", "KIT"), title = "Signaling role KIT_WNT")
+#> Signaling role analysis on the cell-cell communication network from user's input
+gg1 + gg2
+
